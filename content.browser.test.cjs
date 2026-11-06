@@ -6,27 +6,23 @@ const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { test } = require('node:test');
 
-async function browserTests(source) {
+async function browserTests(source, fixture) {
   let frame;
   const results = [];
   const endpoint = 'https://www.sncf-connect.com/bff/api/v1/itineraries';
   const check = (value, message) => { if (!value) throw new Error(message); };
-  const card = `<li data-test="proposal-card">
-    <span data-test="time-label">14:03</span> <span data-test="place">Marseille Saint-Charles</span>
-    <span data-test="time-label">17:22</span> <span data-test="place">Paris - Gare De Lyon - Hall 1 &amp; 2</span>
-  </li>`;
-  const dates = `<button aria-pressed="true" data-date="2026-11-11">11 novembre</button>
-    <button aria-pressed="false" data-date="2026-11-13">13 novembre</button>`;
+  const card = `<li data-test="proposal-card"><div data-test="trip-info" id="trip-info-proposal-11">
+    Marseille Saint-Charles 14:03 → Paris - Gare de Lyon 17:22
+  </div></li>`;
   const proposal = (day = 11, match = true) => ({
-    departure: { dateLabel: `Aller : Mer. ${day} nov.`, timeLabel: '14:03', originStationLabel: 'Marseille Saint-Charles' },
-    arrival: { timeLabel: '17:22', destinationStationLabel: 'Paris - Gare De Lyon - Hall 1 & 2' },
-    services: match ? [{ label: 'Accès autonome en fauteuil roulant' }] : [],
+    id: `proposal-${day}`,
+    departure: { timeLabel: '14:03', originStationLabel: 'Marseille Saint-Charles' },
+    arrival: { timeLabel: '17:22', destinationStationLabel: 'Paris - Gare de Lyon' },
+    services: match ? [{ code: 'AUTONOMOUS_ACCESS_BY_WHEELCHAIR', label: 'Accès autonome en fauteuil roulant' }] : [],
   });
-  const response = (items = [proposal()], day = 11) => ({
-    metadata: { adDatalayer: { datedepart: `2026-11-${day}` } },
-    longDistance: { proposals: { proposals: items } },
-  });
-  function setup(html = `${dates}<ul>${card}</ul>`) {
+  const response = (items = [proposal()]) => ({ longDistance: { proposals: { proposals: items } } });
+
+  function setup(html = `<ul>${card}</ul>`) {
     frame?.remove();
     frame = document.createElement('iframe');
     document.body.appendChild(frame);
@@ -53,122 +49,202 @@ async function browserTests(source) {
         await this.respond(data, 0, ok);
       },
       async select(day) {
-        for (const button of doc.querySelectorAll('[aria-pressed]')) {
-          button.setAttribute('aria-pressed', String(button.getAttribute('data-date') === `2026-11-${day}`));
-        }
+        doc.querySelector('[data-test="trip-info"]').id = `trip-info-proposal-${day}`;
         await flush();
       },
     };
   }
+
   const tests = {
-    async 'cached dates and reused rows'() {
+    async 'cached journeys with identical timetables stay distinct'() {
       const page = setup();
       await page.receive();
-      check(page.marked() === 1, 'Mark the first day');
-      await page.receive(response([proposal(13, false)], 13));
+      check(page.marked() === 1, 'Mark the first proposal');
+      await page.receive(response([proposal(13, false)]));
+      check(page.marked() === 1, 'An unrelated response must not change the current card');
       await page.select(13);
-      check(page.marked() === 0, 'Clear the mark on the second day');
+      check(page.marked() === 0, 'Use the new proposal ID on a reused row');
       await page.select(11);
-      check(page.marked() === 1, 'Restore the cached first day');
+      check(page.marked() === 1, 'Restore the cached proposal without a new request');
     },
-    async 'data-testid and selected-date attributes'() {
-      const page = setup(`${dates}<ul>${card}</ul>`.replaceAll('data-test=', 'data-testid=')
-        .replaceAll('aria-pressed=', 'aria-selected='));
-      await page.receive();
-      check(page.marked() === 1, 'Do not depend on data-test or French button wording');
-      check(page.win.getComputedStyle(page.doc.querySelector('li')).outlineStyle === 'solid', 'Style fallback cards');
-    },
-    async 'semantic markup without test attributes'() {
-      const page = setup(`<button aria-current="date"><time datetime="2026-11-11">Wednesday</time></button>
-        <article><time datetime="2026-11-11T14:03Z">Departure</time> Marseille Saint-Charles
-        <time datetime="17:22">Arrival</time> Paris – Gare de Lyon – Hall 1 &amp; 2
-        <time datetime="PT3H19M">3h19</time></article>`);
-      await page.receive();
-      check(page.marked() === 1, 'Use time elements and the full route');
-      const scans = page.scans();
-      await page.flush();
-      check(page.scans() === scans, 'The badge must not change the route text used for matching');
-    },
-    async 'plain accessible list items'() {
-      const page = setup(`${dates}<ul><li aria-label="Départ de Marseille Saint-Charles 14:03 à destination de Paris - Gare De Lyon - Hall 1 &amp; 2 17:22">Train</li></ul>`);
-      await page.receive();
-      check(page.marked() === 1, 'Use a complete accessible journey label');
-    },
-    async 'response wrappers and text formatting'() {
+    async 'unknown IDs never inherit a matching timetable'() {
       const page = setup();
-      const item = proposal();
-      item.services[0].label = 'ACCE\u0300S\u00a0AUTONOME\n EN FAUTEUIL ROULANT';
-      item.departure.timeLabel = '14h03';
-      item.departure.originStationLabel = 'MARSEILLE SAINT–CHARLES';
-      await page.receive({ data: { experiment: response([null, item]) } }, endpoint.replace('/v1/', '/v2/'));
-      check(page.marked() === 1, 'Normalize text and find valid proposals inside new wrappers');
+      await page.receive();
+      await page.select(99);
+      check(page.marked() === 0, 'Do not guess from stations or times');
+      page.doc.querySelector('[data-test="trip-info"]').removeAttribute('id');
+      await page.flush();
+      check(page.marked() === 0, 'A missing ID must not produce a badge');
     },
-    async 'stale responses cannot overwrite newer journeys'() {
+    async 'translated labels and calendar text do not affect matching'() {
+      const page = setup();
+      for (const [lang, label] of [
+        ['fr', 'Accès autonome en fauteuil roulant'], ['en', 'Autonomous acess for wheelchair users'],
+        ['de', 'Selbstsandiger'], ['it', ''], ['nl', 'A new translation'],
+      ]) {
+        page.doc.documentElement.lang = lang;
+        const item = proposal();
+        item.services[0].label = label;
+        page.doc.querySelector('[data-test="trip-info"]').textContent = `Train — ${lang}`;
+        await page.receive(response([item]));
+        check(page.marked() === 1, 'No month names, date labels or timetable text are needed');
+      }
+    },
+    async 'data-testid and semantic containers'() {
+      for (const html of [
+        card.replaceAll('data-test=', 'data-testid='),
+        '<article><div id="trip-info-proposal-11">Train</div></article>',
+        '<div role="listitem"><div id="trip-info-proposal-11">Train</div></div>',
+      ]) {
+        const page = setup(html);
+        await page.receive();
+        check(page.marked() === 1, 'Find the container from the proposal ID');
+        check(page.win.getComputedStyle(page.doc.querySelector('.userscript-tgv-m-match')).outlineStyle === 'solid', 'Style the matching container');
+      }
+    },
+    async 'desktop accordion IDs retain the ring across breakpoints'() {
+      const page = setup('<ul><li data-test="proposal-card" class="css-1l14mvk"></li></ul>');
+      const item = proposal();
+      item.id = 'dc23d7b5-4d45-4daa-af67-0a0a1cf6371b';
+      const id = `trip-info-${item.id}`;
+      const row = page.doc.querySelector('li');
+      await page.receive(response([item]));
+      for (const width of [960, 1280, 1600, 800]) {
+        page.win.frameElement.style.width = `${width}px`;
+        const wide = page.win.matchMedia('(min-width: 64rem)').matches;
+        check(wide === (width >= 1024), 'Exercise both sides of the real media query');
+        row.innerHTML = wide
+          ? `<div class="MuiAccordion-root" id="${id}" data-test="${id}">
+              <div data-test="trip-info">Train</div>
+              <button id="${id}-summary" aria-controls="${id}-content" aria-expanded="false">Fares</button>
+              <div id="${id}-content" role="region" aria-labelledby="${id}-summary">Offers</div>
+            </div>`
+          : `<div data-test="trip-info" id="${id}">Train</div>`;
+        await page.flush();
+        check(page.marked() === 1, `Keep the highlight at ${width}px`);
+        check(page.win.getComputedStyle(row).outlineStyle === 'solid', 'Show the ring');
+        check(row.querySelectorAll('.userscript-tgv-m-badge').length === 1, 'Keep only one badge');
+        const scans = page.scans();
+        await page.flush();
+        check(page.scans() === scans, 'Do not scan in a mutation loop');
+      }
+    },
+    async 'accessibility references can identify the card'() {
+      for (const attribute of ['aria-describedby', 'aria-labelledby', 'aria-controls']) {
+        const reference = attribute === 'aria-controls' ? 'trip-info-proposal-11-content' : 'trip-info-proposal-11';
+        const page = setup(`<ul><li><button ${attribute}="price ${reference} help">Train</button></li></ul>`);
+        await page.receive();
+        check(page.marked() === 1, 'Read the proposal ID from an accessibility reference');
+        page.doc.querySelector('button').setAttribute(attribute, 'trip-info-unknown');
+        await page.flush();
+        check(page.marked() === 0, 'Watch changes to the reference');
+      }
+    },
+    async 'accordion aliases do not hide real or unknown proposal IDs'() {
+      const page = setup();
+      await page.receive();
+      const info = page.doc.querySelector('[data-test="trip-info"]');
+      info.id = 'trip-info-proposal-11-other';
+      await page.flush();
+      check(page.marked() === 0, 'Do not strip arbitrary ID suffixes');
+      info.id = 'trip-info-proposal-11-summary';
+      const other = proposal(13, false);
+      other.id = 'proposal-11-summary';
+      await page.receive(response([other]));
+      check(page.marked() === 0, 'An exact API ID takes precedence over an accordion alias');
+    },
+    async 'combined proposal IDs use the same escaping as SNCF'() {
+      const page = setup('<li data-test="proposal-card"><div id="trip-info-first__second">Train</div></li>');
+      const item = proposal();
+      item.id = 'first, second';
+      await page.receive(response([item]));
+      check(page.marked() === 1, 'Replace commas and spaces with underscores');
+    },
+    async 'the supplied response identifies only its TGV-M'() {
+      const page = setup('<ul></ul>');
+      for (const item of fixture.longDistance.proposals.proposals) {
+        const row = page.doc.createElement('li');
+        row.setAttribute('data-test', 'proposal-card');
+        const info = page.doc.createElement('div');
+        info.id = `trip-info-${item.id}`.replace(/[, ]/g, '_');
+        info.textContent = item.departure.timeLabel;
+        row.appendChild(info);
+        page.doc.querySelector('ul').appendChild(row);
+      }
+      await page.receive(fixture);
+      check(page.marked() === 1, 'Do not confuse ordinary accessibility with autonomous access');
+      check(page.doc.querySelector('.userscript-tgv-m-match').textContent.includes('10:10'), 'Mark the 10:10 proposal');
+    },
+    async 'response wrappers and API versions can change'() {
+      const page = setup();
+      await page.receive({ data: { experiment: response([null, proposal()]) } }, endpoint.replace('/v1/', '/v2/'));
+      check(page.marked() === 1, 'Find proposals inside different wrappers');
+    },
+    async 'late responses cannot overwrite newer data for the same ID'() {
       const page = setup();
       page.win.fetch(endpoint);
       page.win.fetch(endpoint);
       await page.respond(response([proposal(11, false)]), 1);
       await page.respond(response());
-      check(page.marked() === 0, 'Ignore the older positive response');
+      check(page.marked() === 0, 'Keep the newer classification');
     },
-    async 'pagination can arrive out of order'() {
+    async 'pages can arrive out of order without changing the current card'() {
       const page = setup();
       page.win.fetch(endpoint);
       page.win.fetch(endpoint);
-      const later = proposal(11, false);
-      later.departure.timeLabel = '16:04';
-      await page.respond(response([later]), 1);
+      await page.respond(response([proposal(13, false)]), 1);
       await page.respond(response());
-      check(page.marked() === 1, 'Keep earlier pages that contain different journeys');
+      check(page.marked() === 1, 'Keep both proposals keyed by ID');
+      await page.select(13);
+      check(page.marked() === 0, 'The other proposal must remain non-TGV-M');
     },
-    async 'empty responses invalidate older in-flight results'() {
+    async 'empty results do not discard other cached journeys'() {
       const page = setup();
-      page.win.fetch(endpoint);
-      page.win.fetch(endpoint);
-      await page.respond(response([]), 1);
-      await page.respond(response());
-      check(page.marked() === 0, 'Do not restore a result cleared by a newer response');
       await page.receive();
-      check(page.marked() === 1, 'Accept a newer result after an empty response');
+      page.doc.querySelector('ul').replaceChildren();
+      await page.receive(response([]));
+      check(page.marked() === 0, 'An empty page has no badges');
+      page.doc.querySelector('ul').innerHTML = card;
+      await page.flush();
+      check(page.marked() === 1, 'A cached card can return without another response');
     },
-    async 'late empty and unscoped empty responses preserve newer results'() {
+    async 'conflicting duplicate IDs do not produce a badge'() {
       const page = setup();
-      page.win.fetch(endpoint);
-      page.win.fetch(endpoint);
-      await page.respond(response(), 1);
-      await page.respond(response([]));
-      check(page.marked() === 1, 'Ignore an older empty response');
-      await page.receive({ longDistance: { proposals: { proposals: [] } } });
-      check(page.marked() === 1, 'An unknown date cannot clear the whole cache');
+      for (const items of [[proposal(), proposal(11, false)], [proposal(11, false), proposal()]]) {
+        await page.receive(response(items));
+        check(page.marked() === 0, 'Do not choose an arbitrary duplicate');
+      }
     },
-    async 'conflicting records do not produce a badge'() {
+    async 'translated labels and generic icons are not sufficient'() {
       const page = setup();
-      await page.receive(response([proposal(), proposal(11, false)]));
-      check(page.marked() === 0, 'Do not choose an arbitrary duplicate');
-      await page.receive(response([proposal(11, false), proposal()]));
-      check(page.marked() === 0, 'The record order must not change the answer');
+      for (const code of ['HANDICAPE', 'ACCESSIBLE_TOILET_WITH_GYRATION', undefined]) {
+        const item = proposal();
+        item.services[0].code = code;
+        item.services[0].icon = { iconGroup: 'Services', iconName: 'elevator' };
+        await page.receive(response([item]));
+        check(page.marked() === 0, 'Require the exact autonomous-access code');
+      }
     },
-    async 'unavailable accessibility features do not identify a TGV-M'() {
+    async 'unavailable services and ambiguous cards stay unmarked'() {
       const page = setup();
       const item = proposal();
       item.services[0].available = false;
       await page.receive(response([item]));
-      check(page.marked() === 0, 'An unavailable service is not positive evidence');
-    },
-    async 'conflicting selected years are not guessed'() {
-      const page = setup(`<button aria-pressed="true">11 novembre</button>
-        <button aria-selected="true" data-date="2026-11-11">2026</button>
-        <button aria-current="date" data-date="2027-11-11">2027</button><ul>${card}</ul>`);
+      check(page.marked() === 0, 'Ignore unavailable services');
       await page.receive();
-      check(page.marked() === 0, 'A partial date must not hide a year conflict');
+      const extra = page.doc.createElement('div');
+      extra.id = 'trip-info-another-proposal';
+      page.doc.querySelector('li').appendChild(extra);
+      await page.flush();
+      check(page.marked() === 0, 'Do not guess when a container refers to multiple proposals');
     },
     async 'HTTP failures and malformed payloads preserve valid data'() {
       const page = setup();
       await page.receive();
       await page.receive(response([]), endpoint, false);
       await page.receive({ unexpected: true });
-      await page.receive(response([null, { departure: null }]));
-      check(page.marked() === 1, 'Do not clear valid data on errors or unknown schemas');
+      await page.receive(response([null, { id: 'proposal-11', departure: null }]));
+      check(page.marked() === 1, 'Keep valid data after an error');
     },
     async 'framework class resets and row replacements'() {
       const page = setup();
@@ -178,7 +254,7 @@ async function browserTests(source) {
       check(page.marked() === 1, 'Restore a class removed by the page');
       page.doc.querySelector('ul').innerHTML = card;
       await page.flush();
-      check(page.marked() === 1, 'Mark replacement rows');
+      check(page.marked() === 1, 'Mark a replacement row');
       const scans = page.scans();
       await page.flush();
       check(page.scans() === scans, 'Do not scan in a mutation loop');
@@ -187,27 +263,10 @@ async function browserTests(source) {
       const page = setup();
       await page.receive();
       const body = page.doc.createElement('body');
-      body.innerHTML = `${dates}<ul>${card}</ul>`;
+      body.innerHTML = `<ul>${card}</ul>`;
       page.doc.body.replaceWith(body);
       await page.flush();
       check(page.marked() === 1, 'Observe the document rather than the old body');
-    },
-    async 'unknown dates and mismatched routes remove badges'() {
-      const page = setup();
-      await page.receive();
-      page.doc.querySelector('[data-test="place"]').textContent = 'Nice Ville';
-      await page.flush();
-      check(page.marked() === 0, 'Require both stations');
-      page.doc.querySelector('ul').innerHTML = card;
-      page.doc.querySelector('[aria-pressed="true"]').removeAttribute('data-date');
-      page.doc.querySelector('[aria-pressed="true"]').textContent = 'Choose a day';
-      await page.flush();
-      check(page.marked() === 0, 'Do not guess a missing date');
-    },
-    async 'nested fallback containers do not receive duplicate badges'() {
-      const page = setup(`${dates}<article><ul>${card.replaceAll('data-test=', 'data-unused=')}</ul></article>`);
-      await page.receive();
-      check(page.marked() === 1, 'Mark only the innermost complete journey');
     },
   };
   for (const [name, run] of Object.entries(tests)) {
@@ -222,9 +281,10 @@ test('headless browser resilience checks', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'tgv-m-browser-'));
   try {
     const source = readFileSync(join(__dirname, 'content.user.js'), 'utf8');
+    const fixture = JSON.parse(readFileSync(join(__dirname, 'test-fixtures/itinerary.json'), 'utf8'));
     const path = join(directory, 'tests.html');
     writeFileSync(path, `<body><pre id="results"></pre><script>
-      (${browserTests})(${JSON.stringify(source)}).catch((error) => {
+      (${browserTests})(${JSON.stringify(source)}, ${JSON.stringify(fixture)}).catch((error) => {
         document.querySelector('#results').textContent = JSON.stringify([{ passed: false, error: error.message }]);
       });
     </script>`);
@@ -243,7 +303,7 @@ test('headless browser resilience checks', (t) => {
     assert.ok(match, 'The browser must finish the checks');
     const results = JSON.parse(match[1].replaceAll('&amp;', '&'));
     for (const result of results) console.log(`${result.passed ? 'PASS' : 'FAIL'} ${result.name}: ${result.error || ''}`);
-    assert.equal(results.length, 17);
+    assert.equal(results.length, 19);
     assert.deepEqual(results.filter((result) => !result.passed), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });

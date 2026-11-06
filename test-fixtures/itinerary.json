@@ -1,0 +1,74 @@
+{
+  "longDistance": {
+    "proposals": {
+      "proposals": [
+        {
+          "id": "1b5c1670-648c-43a9-b198-a59189caf42e, 3b856af4-9a61-4090-856d-2340a9be2d40",
+          "departure": {
+            "originStationLabel": "Paris - Gare De Lyon - Hall 1 & 2",
+            "timeLabel": "06:38"
+          },
+          "arrival": {
+            "destinationStationLabel": "Nice",
+            "timeLabel": "13:04"
+          },
+          "globalTimeline": {
+            "steps": [
+              {
+                "train": {
+                  "onBoardServices": [
+                    {
+                      "code": "HANDICAPE",
+                      "label": "Accessible voyageurs handicapés",
+                      "icon": {
+                        "iconGroup": "Services",
+                        "iconName": "accessibility"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "4ea6aa89-23b8-4ed7-b91c-f3b60c4202ea",
+          "departure": {
+            "originStationLabel": "Paris - Gare De Lyon - Hall 1 & 2",
+            "timeLabel": "10:10"
+          },
+          "arrival": {
+            "destinationStationLabel": "Nice",
+            "timeLabel": "16:06"
+          },
+          "globalTimeline": {
+            "steps": [
+              {
+                "train": {
+                  "onBoardServices": [
+                    {
+                      "code": "HANDICAPE",
+                      "label": "Accessible voyageurs handicapés",
+                      "icon": {
+                        "iconGroup": "Services",
+                        "iconName": "accessibility"
+                      }
+                    },
+                    {
+                      "code": "AUTONOMOUS_ACCESS_BY_WHEELCHAIR",
+                      "label": "Accès autonome en fauteuil roulant",
+                      "icon": {
+                        "iconGroup": "Services",
+                        "iconName": "elevator"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

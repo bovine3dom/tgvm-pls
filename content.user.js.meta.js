@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         pls gib TGV-M
 // @namespace    https://github.com/bovine3dom/tgvm-pls
-// @version      0.0.1
+// @version      0.0.2
 // @description  Puts a nice big box around TGV-M services
 // @author       bovine3dom
 // @match        https://www.sncf-connect.com/*
