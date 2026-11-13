@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         pls gib TGV-M
 // @namespace    https://github.com/bovine3dom/tgvm-pls
-// @version      0.0.2
+// @version      0.0.3
 // @description  Puts a nice big box around TGV-M services
 // @author       bovine3dom
 // @match        https://www.sncf-connect.com/*
@@ -17,6 +17,7 @@
   'use strict';
 
   const SERVICE_CODE = 'AUTONOMOUS_ACCESS_BY_WHEELCHAIR';
+  const PROFILE_CODES = ['ACCESSIBLE_TOILET_WITH_GYRATION', 'ONBOARD_INFORMATION_DISPLAY'];
   const MATCH_CLASS = 'userscript-tgv-m-match';
   const BADGE_CLASS = 'userscript-tgv-m-badge';
   const STYLE_ID = 'userscript-tgv-m-style';
@@ -45,6 +46,9 @@
       const value = queue[index];
       if (value && typeof value === 'object' && value.available !== false) {
         if (value.code === SERVICE_CODE) return true;
+        if (value.transporter?.logo === 'tgv_inoui' && Array.isArray(value.onBoardServices)
+          && PROFILE_CODES.every((code) => value.onBoardServices.some((service) =>
+            service?.code === code && service.available !== false))) return true;
         for (const item of Object.values(value)) queue.push(item);
       }
     }
